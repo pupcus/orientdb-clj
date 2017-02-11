@@ -6,6 +6,47 @@
             [cheshire.core :as json]
             [clojure.string :as str]))
 
+;; -----
+;; honeysql extensions for orientdb
+;;
+
+(defmethod fmt/format-clause :delete-vertex [[op v] sqlmap]
+  (str "DELETE VERTEX " (fmt/to-sql v)))
+
+(helpers/defhelper delete-vertex [m args]
+  (assoc m :delete-vertex (first args)))
+
+(fmt/register-clause! :delete-vertex 20)
+
+(defmethod fmt/format-clause :remove [[op v] sqlmap]
+  (str "REMOVE " (fmt/to-sql v)))
+
+(helpers/defhelper remove [m args]
+  (assoc m :remove (first args)))
+
+(fmt/register-clause! :remove 75)
+
+(defn remove-property-map [table property & c]
+  (reduce criteria
+          (-> (helpers/update table)
+              (remove property))
+          c))
+
+(defmethod fmt/format-clause :content [[op v] sqlmap]
+  (str "CONTENT " (json/encode v)))
+
+(helpers/defhelper content [m args]
+  (assoc m :content (first args)))
+
+(fmt/register-clause! :content 90)
+
+(defmethod fmt/fn-handler "contains" [op field predicate]
+  (str (fmt/to-sql field) " CONTAINS " (fmt/format-predicate* predicate)))
+
+;; ----
+;; helper functions
+;;
+
 (defn dissoc-re
   "dissoc any key from the Map for which the string representation
   matches the given regular expression"
@@ -45,6 +86,10 @@
        {k v}))
    rec))
 
+;; -----
+;; criteria
+;;
+
 (defn- criteria-dispatch [_ c]
   (class c))
 
@@ -60,6 +105,11 @@
 
 (defmethod criteria :default [_ c]
   (throw (IllegalStateException. "Ill formed criteria:  [%s]" c)))
+
+
+;; ----
+;; honeysql map building
+;;
 
 (defn query-map
   "build a honeysql map to select * from table reducing criteria to a where clause"
@@ -78,7 +128,6 @@
   "build a honeysql map to select * from table reducing criteria to a where clause"
   [table & c]
   (apply query-map table [:%count.* :n] c))
-
 
 (defn set-with-content [m]
   (str/join
@@ -114,28 +163,4 @@
 (defn delete-map
   "build a honeysql map to delete from table reducing criteria to a where clause"
   [table & c]
-  (reduce criteria (helpers/delete-from table) c))
-
-(defmethod fmt/format-clause :remove [[op v] sqlmap]
-  (str "REMOVE " (fmt/to-sql v)))
-
-(helpers/defhelper remove [m args]
-  (assoc m :remove (first args)))
-
-(fmt/register-clause! :remove 75)
-
-(defn remove-property-map [table property & c]
-  (reduce criteria
-          (-> (helpers/update table)
-              (remove property))
-          c))
-
-(defmethod fmt/format-clause :content [[op v] sqlmap]
-  (str "CONTENT " (json/encode v)))
-
-(helpers/defhelper content [m args]
-  (assoc m :content (first args)))
-
-(fmt/register-clause! :content 90)
-
-
+  (reduce criteria (delete-vertex table) c))

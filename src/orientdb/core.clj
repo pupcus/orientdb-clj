@@ -18,31 +18,37 @@
     (= "memory"  dbtype)  (str dbtype ":" "database/" database)
     :default  (throw (ex-info "invalid database type: must be 'remote', 'plocal', or 'memory" options))))
 
-(defrecord DataSource [user password dbtype hostname database]
+(defrecord DataSource [user password dbtype hostname database pool-size]
   component/Lifecycle
   (start [component]
     (log/infof "Starting orientdb datasource type [%s] for database [%s]" dbtype database)
     (let [subname (build-subname component)
-          factory (com.orientechnologies.orient.core.db.OPartitionedDatabasePoolFactory.)
+          factory (com.orientechnologies.orient.core.db.OPartitionedDatabasePoolFactory. (or pool-size 10))
           pool (.get factory subname user password)]
       (with-meta (assoc component :pool pool :factory factory :subname subname :password "hidden") {:password password})))
 
   (stop [{:keys [factory dbtype database] :as component}]
     (log/infof "Shutting down orientdb datasource type [%s] for db [%s]" dbtype database)
     (.close factory)
-    (-> (dissoc component :db :pool :factory :subname :passwd)
-        (assoc component :password (:password (meta component))))))
+    (let [{:keys [password] :as meta-map} (meta component)]
+      (-> (dissoc component :db :pool :factory :subname :passwd)
+          (assoc component :password password)))))
+
 
 (defn add-connection [connection db]
   (assoc db :connection connection))
 
 (defn get-connection [{:keys [connection] :as db}]
-  connection)
+  (when connection
+    (.set com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal/INSTANCE connection)
+    (.activateOnCurrentThread (cast com.orientechnologies.orient.core.db.document.ODatabaseDocument connection))))
 
-(defn new-connection [{:keys [pool]}]
-  (let [con (.acquire pool)]
-    (.set com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal/INSTANCE con)
-    con))
+(defn new-connection [{:keys [subname user] :as db}]
+  (let [{:keys [password]} (meta db)
+        connection (doto (com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx. subname)
+                     (.open user password))]
+    (.set com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal/INSTANCE connection)
+    (.activateOnCurrentThread (cast com.orientechnologies.orient.core.db.document.ODatabaseDocument connection))))
 
 (defmacro with-db-connection [binding & body]
   `(let [f# (^{:once true} fn* [~(first binding)] ~@body)
@@ -50,9 +56,8 @@
      (if-let [exists# (get-connection db-spec#)]
        (f# db-spec#)
        (with-open [con# (new-connection db-spec#)]
-         (log/debug "opening new connection ....")
-         (let [~(first binding) (add-connection con# db-spec#)]
-           (f# ~(first binding)))))))
+         (let [new-db-spec# (add-connection con# db-spec#)]
+           (f# new-db-spec#))))))
 
 (defn- get-level [db]
   (get db :level 0))
@@ -97,13 +102,23 @@
 
 (defn execute! [db sql-v]
   (log/debug sql-v)
-  (with-db-connection [c db]
-    (-> (.command (get-connection c) (com.orientechnologies.orient.core.sql.OCommandSQL. (first sql-v)))
-        (.execute (to-array (rest sql-v))))))
+  (with-db-connection [dbx db]
+    (let [rs (as-> (first sql-v) %
+               (com.orientechnologies.orient.core.sql.OCommandSQL. %)
+               (.command (get-connection dbx) %)
+               (.execute % (to-array (rest sql-v))))]
+      (cond
+        (instance? java.util.List rs)
+        (mapv ODocument->map (.toArray rs))
+
+        (instance? com.orientechnologies.orient.core.record.impl.ODocument rs)
+        (ODocument->map rs)
+
+        :otherwise
+        rs))))
 
 (defn query [db sql-v]
-  (let [rs (execute! db sql-v)]
-    (mapv ODocument->map (.toArray rs))))
+  (execute! db sql-v))
 
 (defn get-document-instance [db table]
   (with-db-connection [c db]

@@ -1,10 +1,27 @@
 (ns orientdb.crud
-  (:refer-clojure :exclude [find])
+  (:refer-clojure :exclude [find class type])
   (:require [clojure.string :as str]
             [honeysql.core :as sql]
             [honeysql.helpers :as h]
             [orientdb.core :as core]
             [orientdb.utils :as util]))
+
+(def _CLASS   (keyword "@class"))
+(def _RID     (keyword "@rid"))
+(def _TYPE    (keyword "@type"))
+(def _VERSION (keyword "@version"))
+
+(defn class [rec]
+  (get (meta rec) _CLASS))
+
+(defn rid [rec]
+  (get (meta rec) _RID))
+
+(defn type [rec]
+  (get (meta rec) _TYPE))
+
+(defn version [rec]
+  (get (meta rec) _VERSION))
 
 (defn select
   "select from table based on a sequence of criteria"
@@ -16,7 +33,7 @@
   (first (apply select db table criteria)))
 
 (defn find-by-id [db table id]
-  (find db table {(keyword "@rid") id}))
+  (find db table {_RID id}))
 
 (defn exists?
   "check existence in table based on a sequence of criteria"
@@ -26,17 +43,15 @@
     (if (> n 0) n)))
 
 (defn- generated-id [result]
-  ((keyword "@rid") result))
+  (rid result))
 
 (defn insert! [db table m]
   (let [sql-m (-> (h/insert-into table)
                   (util/content m))
         sql-v (sql/format sql-m)]
-    (core/execute! db (sql/format sql-m))))
+    (core/execute! db sql-v)))
 
-(defn create! [db table m]
-  (let [document (insert! db table m)]
-    (core/ODocument->map document)))
+(def create! insert!)
 
 (defn- update* [db table m & criteria]
   (if (empty? m)
@@ -54,14 +69,14 @@
    else use m as set values to update entire db (careful!)"
   [db table m & criteria]
   (println "UPDATE meta" (meta m))
-  (if-let [id (get (meta m) (keyword "@rid"))]
-    (let [criteria (cons {(keyword "@rid") id} criteria)]
+  (if-let [id (rid m)]
+    (let [criteria (cons {_RID id} criteria)]
       (apply update* db table m criteria)
       (find-by-id db table id))
     (apply update* db table m criteria)))
 
 (defn upsert! [db table m]
-  (if ((keyword "@rid") (meta m))
+  (if (rid m)
     (update! db table m)
     (insert! db table m)))
 
