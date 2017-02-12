@@ -26,12 +26,6 @@
 
 (fmt/register-clause! :remove 75)
 
-(defn remove-property-map [table property & c]
-  (reduce criteria
-          (-> (helpers/update table)
-              (remove property))
-          c))
-
 (defmethod fmt/format-clause :content [[op v] sqlmap]
   (str "CONTENT " (json/encode v)))
 
@@ -164,3 +158,10 @@
   "build a honeysql map to delete from table reducing criteria to a where clause"
   [table & c]
   (reduce criteria (delete-vertex table) c))
+
+(defn remove-property-map [table property & c]
+  (reduce criteria
+          (-> (helpers/update table)
+              (remove property))
+          c))
+
