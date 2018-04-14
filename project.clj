@@ -2,9 +2,9 @@
 
   :description "using an orientdb database in clojure"
 
-  :url "https://bitbucket.org/pupcus/orientdb-clj"
+  :url "https://github.com/pupcus/orientdb-clj"
 
-  :scm {:url "git@bitbucket.org:pupcus/orientdb-clj"}
+  :scm {:url "git@github.com:pupcus/orientdb-clj.git"}
 
   :license {:name "Eclipse Public License"
             :url  "http://www.eclipse.org/legal/epl-v10.html"}
