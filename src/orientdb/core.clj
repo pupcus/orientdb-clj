@@ -31,8 +31,8 @@
     (log/infof "Shutting down orientdb datasource type [%s] for db [%s]" dbtype database)
     (.close factory)
     (let [{:keys [password] :as meta-map} (meta component)]
-      (-> (dissoc component :db :pool :factory :subname :passwd)
-          (assoc component :password password)))))
+      (-> (dissoc component :db :pool :factory :subname :password)
+          (assoc :password password)))))
 
 
 (defn add-connection [connection db]
@@ -67,8 +67,10 @@
     (assoc db :level (inc level))))
 
 ;; ----
-;; io! --> https://clojuredocs.org/clojure.core/io!
+;; NOTE: I am not convinced this is working (yet). Any thoughts on it are welcome.
+;; This is based on the db-transaction* code in the jdbc clojure library.
 ;;
+;; FYI:  io! --> documentation is here: https://clojuredocs.org/clojure.core/io!
 ;;
 (defn db-transaction* [db func]
   (if (zero? (get-level db))
@@ -76,29 +78,69 @@
       (let [nested-db (inc-level db)]
         (io!
          (.begin con com.orientechnologies.orient.core.tx.OTransaction$TXTYPE/OPTIMISTIC)
+         (doto (.getTransaction con)
+           (.setIsolationLevel com.orientechnologies.orient.core.tx.OTransaction$ISOLATION_LEVEL/READ_COMMITTED))
          (try
            (let [result (func nested-db)]
              (.commit con)
              result)
            (catch Throwable t
-             (prn t)
-             (.rollback con)
+             (.rollback con true)
              (throw t)))))
       (with-open [con (new-connection db)]
         (db-transaction* (add-connection con db) func)))
-    (try
-      (func (inc-level db))
-      (catch Exception e
-        (throw e)))))
+    (func (inc-level db))))
 
 (defmacro with-db-transaction [binding & body]
   `(db-transaction* ~(second binding) (^{:once true} fn* [~(first binding)] ~@body)))
 
-(defn ODocument->map [document]
-  (let [m (parse-string (.toJSON document) true)
-        meta (u/filter-meta m)
-        data (u/dissoc-meta m)]
+(defn process-string-data [data-map]
+  (reduce-kv
+   (fn [m k v]
+     (if (string? v)
+       (assoc m k (u/maybe-json v))
+       (assoc m k v)))
+   {}
+   data-map))
+
+(defn build-record [rec]
+  (let [meta (u/filter-meta rec)
+        data (u/dissoc-meta rec)]
     (with-meta data meta)))
+
+(defn ODocument->map [document]
+  (let [m (-> document
+              (.toJSON)
+              (parse-string true)
+              (process-string-data))
+        _ (println "\n********\nINITIAL RESULT=" m "\n********\n")
+        target-id (get m (keyword "@rid"))
+        [index _] (u/index-all-returned-records m)
+        index (reduce-kv
+               (fn [m k v]
+                 (assoc m k (build-record v)))
+               {}
+               index)
+        target (get index target-id)]
+    [target index]))
+
+(defn index-by [f recs]
+  (reduce
+   (fn [m rec]
+     (let [k (f rec)
+           grp (get m k [])]
+       (assoc m k (conj grp rec))))
+   {}
+   recs))
+
+(defn build-response-map [targets index]
+  (let [targets (u/ensure-vector targets)
+        recs (vec (vals index))]
+    (-> {}
+        (assoc :all recs)
+        (assoc :targets targets)
+        (assoc :by-rid index)
+        (assoc :by-class (index-by u/class recs)))))
 
 (defn execute! [db sql-v]
   (log/debug sql-v)
@@ -106,16 +148,22 @@
     (let [rs (as-> (first sql-v) %
                (com.orientechnologies.orient.core.sql.OCommandSQL. %)
                (.command (get-connection dbx) %)
-               (.execute % (to-array (rest sql-v))))]
-      (cond
-        (instance? java.util.List rs)
-        (mapv ODocument->map (.toArray rs))
+               (.execute % (to-array (rest sql-v))))
+          [targets idx] (cond
+                          (instance? java.util.List rs)
+                          (reduce
+                           (fn [[t i] document]
+                             (let [[target index] (ODocument->map document)]
+                               [(conj t target) (merge i index)]))
+                           [[] {}]
+                           (.toArray rs))
 
-        (instance? com.orientechnologies.orient.core.record.impl.ODocument rs)
-        (ODocument->map rs)
+                          (instance? com.orientechnologies.orient.core.record.impl.ODocument rs)
+                          (ODocument->map rs)
 
-        :otherwise
-        rs))))
+                          :otherwise
+                          rs)]
+      (build-response-map targets idx))))
 
 (defn query [db sql-v]
   (execute! db sql-v))

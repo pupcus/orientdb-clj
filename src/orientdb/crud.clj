@@ -6,23 +6,6 @@
             [orientdb.core :as core]
             [orientdb.utils :as util]))
 
-(def _CLASS   (keyword "@class"))
-(def _RID     (keyword "@rid"))
-(def _TYPE    (keyword "@type"))
-(def _VERSION (keyword "@version"))
-
-(defn class [rec]
-  (get (meta rec) _CLASS))
-
-(defn rid [rec]
-  (get (meta rec) _RID))
-
-(defn type [rec]
-  (get (meta rec) _TYPE))
-
-(defn version [rec]
-  (get (meta rec) _VERSION))
-
 (defn select
   "select from table based on a sequence of criteria"
   [db table & criteria]
@@ -33,7 +16,7 @@
   (first (apply select db table criteria)))
 
 (defn find-by-id [db table id]
-  (find db table {_RID id}))
+  (find db table {util/_RID id}))
 
 (defn exists?
   "check existence in table based on a sequence of criteria"
@@ -43,7 +26,7 @@
     (if (> n 0) n)))
 
 (defn- generated-id [result]
-  (rid result))
+  (util/rid result))
 
 (defn insert! [db table m]
   (let [sql-m (-> (h/insert-into table)
@@ -68,15 +51,14 @@
 
    else use m as set values to update entire db (careful!)"
   [db table m & criteria]
-  (println "UPDATE meta" (meta m))
-  (if-let [id (rid m)]
-    (let [criteria (cons {_RID id} criteria)]
+  (if-let [id (util/rid m)]
+    (let [criteria (cons {util/_RID id} criteria)]
       (apply update* db table m criteria)
       (find-by-id db table id))
     (apply update* db table m criteria)))
 
 (defn upsert! [db table m]
-  (if (rid m)
+  (if (util/rid m)
     (update! db table m)
     (insert! db table m)))
 
